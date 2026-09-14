@@ -138,6 +138,14 @@ canvas#minimap{width:100%;height:34px;display:block;cursor:pointer;touch-action:
 .gfw-unit{font-family:'Rajdhani',sans-serif;font-size:10px;color:#5ec8de;margin-top:2px;letter-spacing:.15em;}
 .gfw-glbl{font-family:'Rajdhani',sans-serif;font-size:12px;letter-spacing:.22em;
   text-transform:uppercase;color:#6c8494;margin-top:2px;font-weight:600;}
+/* 全画面時のみ表示するシークバー(通常時のミニマップと同じ役割) */
+.gfsSeek{display:none;position:absolute;left:8px;right:8px;bottom:8px;height:36px;
+  background:rgba(11,14,20,0.85);border:1px solid var(--edge);border-radius:8px;
+  overflow:hidden;z-index:2;touch-action:none;}
+.gwrap.gfs .gfsSeek{display:block;}
+.gfsSeekFill{position:absolute;left:0;top:0;bottom:0;width:0%;background:rgba(90,200,255,0.28);}
+.gfsSeekLabel{position:relative;z-index:1;display:flex;align-items:center;justify-content:center;
+  height:100%;font-family:var(--mono);font-size:12px;color:#cfeaff;letter-spacing:.05em;}
 /* PID探索ログの応答種別による色分け */
 .pidlog-sent{color:#6c8494;}
 .pidlog-dim{color:#5b6470;}
@@ -410,6 +418,10 @@ footer{text-align:center;font-size:9px;color:#3A4048;padding:2px 0;}
     <button class="icob"    data-icon="ufo"      title="UFO">🛸</button>
   </div>
   <canvas id="graph"></canvas>
+  <div class="gfsSeek" id="gfsSeek">
+    <div class="gfsSeekFill" id="gfsSeekFill"></div>
+    <div class="gfsSeekLabel" id="gfsSeekLabel">00:00 / 00:00</div>
+  </div>
 </div>
 
 <div class="rdrow">
@@ -425,7 +437,7 @@ footer{text-align:center;font-size:9px;color:#3A4048;padding:2px 0;}
   <button class="ctrl" id="csvBtn">走行結果DL</button>
 </div>
 <div class="strow" id="stRow">パターンを選択してください</div>
-<footer>Speed Tracer · NEDC / JC08 / WLTC / FTP-75 · WiFi · USB · Bluetooth · GPS · v2026-09-13.34(PWA)</footer>
+<footer>Speed Tracer · NEDC / JC08 / WLTC / FTP-75 · WiFi · USB · Bluetooth · GPS · v2026-09-13.36</footer>
 
 </div><!-- /#app -->
 <script>
@@ -547,6 +559,9 @@ const srcBadge  =$('srcBadge');
 const phaseLabel=$('phaseLabel');
 const mmCv      =$('minimap');
 const mmCtx     =mmCv.getContext('2d');
+const gfsSeek     =$('gfsSeek');
+const gfsSeekFill =$('gfsSeekFill');
+const gfsSeekLabel=$('gfsSeekLabel');
 const tNow      =$('tNow');
 const tTotal    =$('tTotal');
 const tgtSpd    =$('tgtSpd');
@@ -865,17 +880,17 @@ function rszG(){
 function rszAll(){rszG();rszMM();}
 
 // ===== 全画面透かし用の簡易HUD数値表示(ダイアグモードと同じ書体、リングなし) =====
-function gfwBuildVal(elId){
+function gfwBuildVal(elId, decimals){
   const el=document.getElementById(elId);
   return function(value){
-    el.textContent = Number.isFinite(value) ? Math.round(value) : '--';
+    el.textContent = Number.isFinite(value) ? value.toFixed(decimals||0) : '--';
   };
 }
-const gfwUpdSpeed=gfwBuildVal('gfwValSpeed');
+const gfwUpdSpeed=gfwBuildVal('gfwValSpeed', 1);   // 車速: 小数点第一位まで表示
 const gfwUpdCoolant=gfwBuildVal('gfwValCoolant');
 const gfwUpdMaf=gfwBuildVal('gfwValMaf');
-const gfwUpdFuel=gfwBuildVal('gfwValFuel');
-const gfwUpdMap=gfwBuildVal('gfwValMap');
+const gfwUpdFuel=gfwBuildVal('gfwValFuel', 1);
+const gfwUpdMap=gfwBuildVal('gfwValMap', 1);       // ブースト: 小数点第一位まで表示
 gfwUpdSpeed(0);
 gfwUpdCoolant(0); gfwUpdMaf(0); gfwUpdFuel(0); gfwUpdMap(0);
 
@@ -1735,7 +1750,7 @@ function tick(){
   diffV.textContent=(diff>0.05?'+':'')+diff.toFixed(1);
   diffV.style.color=dCol(adf);
   gfwUpdSpeed(actual); // 全画面時の透かし車速メーターを更新
-  tNow.textContent=fmt(el);drawMM(el);
+  tNow.textContent=fmt(el);drawMM(el);updateGfsSeek(el);
   phaseLabel.textContent=fmt(el)+' / '+fmt(d);
   // 0.1秒間隔でのみログ記録（毎フレーム記録するとカクカクの原因になる）
   const logT=Math.round(el*10)/10;
@@ -1819,7 +1834,7 @@ function resetAll(){
   running=false;pausedAt=0;startTs=null;runLog=[];lastSpd=0;smoothedSpd=0;finishedRun=false;
   if(src==='gps')stopGps();if(rafId)cancelAnimationFrame(rafId);
   startBtn.textContent='開始';startBtn.classList.remove('run');
-  tNow.textContent='00:00';drawMM(0);
+  tNow.textContent='00:00';drawMM(0);updateGfsSeek(0);
   document.querySelector('.rb.tgt').classList.remove('finished');
   tgtLbl.textContent='目標';actLbl.textContent='実速度';diffLbl.textContent='差分';
   diffV.style.color='var(--act)';
@@ -1845,7 +1860,7 @@ function seekTo(ratio){
   const t=Math.max(0,Math.min(d,ratio*d));
   pausedAt=t;
   tNow.textContent=fmt(t);
-  drawMM(t);drawG(t);
+  drawMM(t);drawG(t);updateGfsSeek(t);
   const target=interp(curPts,t);
   tgtSpd.textContent=target.toFixed(1);
   phaseLabel.textContent=fmt(t)+' / '+fmt(d);
@@ -1857,7 +1872,21 @@ function mmRatioFromEvent(e){
 let mmSeeking=false;
 mmCv.addEventListener('pointerdown',function(e){if(!curPts||running)return;mmSeeking=true;seekTo(mmRatioFromEvent(e));});
 mmCv.addEventListener('pointermove',function(e){if(mmSeeking)seekTo(mmRatioFromEvent(e));});
-window.addEventListener('pointerup',function(){mmSeeking=false;});
+window.addEventListener('pointerup',function(){mmSeeking=false;gfsSeeking=false;});
+// 全画面用シークバー(同じseekTo()を共有)
+function updateGfsSeek(t){
+  const d=curPts?dur(curPts):0;
+  const pct=d>0?Math.max(0,Math.min(100,(t/d)*100)):0;
+  gfsSeekFill.style.width=pct+'%';
+  gfsSeekLabel.textContent=fmt(t)+' / '+fmt(d);
+}
+function gfsSeekRatioFromEvent(e){
+  const r=gfsSeek.getBoundingClientRect();
+  return(e.clientX-r.left)/r.width;
+}
+let gfsSeeking=false;
+gfsSeek.addEventListener('pointerdown',function(e){if(!curPts||running)return;gfsSeeking=true;seekTo(gfsSeekRatioFromEvent(e));});
+gfsSeek.addEventListener('pointermove',function(e){if(gfsSeeking)seekTo(gfsSeekRatioFromEvent(e));});
 
 startBtn.addEventListener('click',function(){
   if(!audioCtx)try{audioCtx=new(window.AudioContext||window.webkitAudioContext)();}catch(e){}
