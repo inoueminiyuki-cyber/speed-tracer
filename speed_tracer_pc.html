@@ -245,7 +245,7 @@ footer{text-align:center;font-size:13px;color:#6c7480;padding:6px 0;}
 <div id="app">
 
 <header>
-  <div class="title">Speed Tracer <span id="verTag" style="color:#4ade80;font-size:11px;letter-spacing:0;font-weight:600;vertical-align:middle">v2026-09-15.46</span></div>
+  <div class="title">Speed Tracer <span id="verTag" style="color:#4ade80;font-size:11px;letter-spacing:0;font-weight:600;vertical-align:middle">v2026-09-16.48</span></div>
   <div class="hright">
     <span class="badge" id="wakeBadge" style="cursor:pointer">💡</span>
     <span class="badge" id="srcBadge">GPS</span>
@@ -581,6 +581,35 @@ footer{text-align:center;font-size:13px;color:#6c7480;padding:6px 0;}
     <div id="elmLog" style="max-height:260px;overflow-y:auto;background:#0b0e14;
       border:1px solid var(--edge);border-radius:8px;padding:6px;font-family:var(--mono);
       font-size:11px;line-height:1.5;white-space:pre-wrap;color:#9fe3b0"></div>
+  </div>
+
+  <div style="margin-top:10px;border-top:1px solid var(--edge);padding-top:10px">
+    <div class="plbl">監視パラメータ設定(車種プロファイル)</div>
+    <div style="font-size:11px;color:var(--dim);margin-bottom:8px">
+      「全部(RPM等も)」モードで取得する10項目を、車種ごとに自由に設定できます。
+      「よく使うパラメータ」で標準的な項目を選ぶか、PID探索で見つけたPID/DIDを直接入力してください。
+    </div>
+    <div style="display:flex;gap:6px;margin-bottom:8px">
+      <button class="sbtn" id="btnChanGet" style="flex:1">🔄 機体の現在設定を取得</button>
+      <button class="sbtn" id="btnChanApply" style="flex:1;background:#0a3a1a;border-color:#107a3a;color:#66ffb0">✅ この内容を機体に適用</button>
+    </div>
+    <div id="chanStatus" style="font-size:11px;color:var(--dim);margin-bottom:8px"></div>
+    <div id="chanRows"></div>
+    <div style="border-top:1px solid var(--edge);margin-top:10px;padding-top:10px">
+      <div class="plbl">車種プロファイル(この端末にのみ保存)</div>
+      <div style="display:flex;gap:6px;margin-bottom:6px">
+        <input type="text" id="chanProfileNameIn" placeholder="プロファイル名(例: クラウンクロスオーバー)"
+          style="flex:1;background:var(--bg);color:var(--ink);border:1px solid var(--edge);border-radius:6px;padding:6px 8px">
+        <button class="sbtn" id="btnChanProfileSave">💾 保存</button>
+      </div>
+      <div style="display:flex;gap:6px">
+        <select id="chanProfileSel" style="flex:1;background:var(--bg);color:var(--ink);border:1px solid var(--edge);border-radius:6px;padding:6px 8px">
+          <option value="">― 保存済みプロファイル ―</option>
+        </select>
+        <button class="sbtn" id="btnChanProfileLoad">📂 読込</button>
+        <button class="sbtn" id="btnChanProfileDel" style="border-color:#4a1f18;color:#E85D4F">🗑</button>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -1559,6 +1588,7 @@ function appendRawLog(line){
 function handleUnmatched(t){
   if(t.length===0)return;
   let m;
+  if(t.indexOf('CHCFGVAL:')===0){ if(handleChanCfgVal(t)){appendRawLog(t);return;} }
   // 接続直後に送る"status"の応答。機体(全端末共通)の現在設定にこちらを合わせる。
   // (逆に、こちらのローカル設定を機体へ押し付けると、複数端末で接続し合った時に
   //  後から繋いだ端末の初期値で他の端末の設定が無言で上書きされてしまうため)
@@ -1907,6 +1937,189 @@ function runPid22SnapMemo(){
 btnPid22Snap.addEventListener('click',runPid22SnapMemo);
 btnPid22SnapCopy.addEventListener('click',()=>copyLogEl(pid22SnapLog,btnPid22SnapCopy,'📋 記録をコピー'));
 btnElmLogCopy.addEventListener('click',()=>copyLogEl(elmLog,btnElmLogCopy,'📋 ログをコピー'));
+
+// ===== 監視パラメータ設定(車種プロファイル) =====
+const NUM_CHANNELS=10;
+// よく使うパラメータのプリセット(mode,pid/did 16進,header 16進,byteOffset,byteCount,scale,offset,label,unit)
+const CHAN_PRESETS=[
+  {name:'カスタム(手動入力)', mode:'1', pid:'', hdr:'', off:'0', cnt:'1', scale:'1', ofs:'0', label:'', unit:''},
+  {name:'RPM(標準)',        mode:'1', pid:'0C',   hdr:'', off:'0', cnt:'2', scale:'0.25',    ofs:'0',   label:'RPM',     unit:'rpm'},
+  {name:'水温(標準)',        mode:'1', pid:'05',   hdr:'', off:'0', cnt:'1', scale:'1',       ofs:'-40', label:'水温',    unit:'C'},
+  {name:'スロットル開度(標準)', mode:'1', pid:'11', hdr:'', off:'0', cnt:'1', scale:'0.392157',ofs:'0',   label:'スロットル', unit:'%'},
+  {name:'エンジン負荷(標準)',  mode:'1', pid:'04',   hdr:'', off:'0', cnt:'1', scale:'0.392157',ofs:'0',   label:'負荷',    unit:'%'},
+  {name:'吸気圧(標準MAP)',    mode:'1', pid:'0B',   hdr:'', off:'0', cnt:'1', scale:'1',       ofs:'0',   label:'吸気圧',  unit:'kPa'},
+  {name:'吸気温度(標準)',      mode:'1', pid:'0F',   hdr:'', off:'0', cnt:'1', scale:'1',       ofs:'-40', label:'吸気温',  unit:'C'},
+  {name:'MAF(標準)',         mode:'1', pid:'10',   hdr:'', off:'0', cnt:'2', scale:'0.01',     ofs:'0',   label:'MAF',     unit:'g/s'},
+  {name:'点火時期(標準)',      mode:'1', pid:'0E',   hdr:'', off:'0', cnt:'1', scale:'0.5',      ofs:'-64', label:'点火時期', unit:'deg'},
+  {name:'制御モジュール電圧(標準)', mode:'1', pid:'42', hdr:'', off:'0', cnt:'2', scale:'0.001',  ofs:'0',   label:'電圧',    unit:'V'},
+  {name:'燃料残量(標準、多くの車で無応答)', mode:'1', pid:'2F', hdr:'', off:'0', cnt:'1', scale:'0.392157', ofs:'0', label:'燃料残量', unit:'%'},
+];
+const chanRows=$('chanRows');
+const chanStatus=$('chanStatus');
+const chanProfileNameIn=$('chanProfileNameIn');
+const chanProfileSel=$('chanProfileSel');
+const btnChanGet=$('btnChanGet'),btnChanApply=$('btnChanApply');
+const btnChanProfileSave=$('btnChanProfileSave'),btnChanProfileLoad=$('btnChanProfileLoad'),btnChanProfileDel=$('btnChanProfileDel');
+
+function buildChanRowsUI(){
+  let html='';
+  for(let i=0;i<NUM_CHANNELS;i++){
+    let opts='';
+    for(const p of CHAN_PRESETS) opts+='<option value="'+p.name+'">'+p.name+'</option>';
+    html+='<div style="background:#161b24;border-radius:8px;padding:8px;margin-bottom:6px">'
+      +'<div style="font-size:10px;color:var(--dim);margin-bottom:4px">チャンネル '+i+'</div>'
+      +'<select class="chanPreset" data-i="'+i+'" style="width:100%;background:var(--bg);color:var(--ink);border:1px solid var(--edge);border-radius:6px;padding:5px;margin-bottom:4px;font-size:12px">'+opts+'</select>'
+      +'<div style="display:flex;gap:4px;margin-bottom:4px">'
+      +'<input class="chanLabel" data-i="'+i+'" placeholder="名前" style="flex:1;min-width:0;background:var(--bg);color:var(--ink);border:1px solid var(--edge);border-radius:6px;padding:5px;font-size:12px">'
+      +'<input class="chanUnit" data-i="'+i+'" placeholder="単位" style="width:54px;background:var(--bg);color:var(--ink);border:1px solid var(--edge);border-radius:6px;padding:5px;font-size:12px">'
+      +'</div>'
+      +'<div style="display:flex;gap:4px;margin-bottom:4px">'
+      +'<select class="chanMode" data-i="'+i+'" style="width:66px;background:var(--bg);color:var(--ink);border:1px solid var(--edge);border-radius:6px;padding:5px;font-size:12px"><option value="1">Mode01</option><option value="22">Mode22</option></select>'
+      +'<input class="chanPid" data-i="'+i+'" placeholder="PID/DID(16進)" style="flex:1;min-width:0;background:var(--bg);color:var(--ink);border:1px solid var(--edge);border-radius:6px;padding:5px;font-size:12px;font-family:var(--mono)">'
+      +'<input class="chanHdr" data-i="'+i+'" placeholder="ヘッダー(Mode22)" style="width:90px;background:var(--bg);color:var(--ink);border:1px solid var(--edge);border-radius:6px;padding:5px;font-size:12px;font-family:var(--mono)">'
+      +'</div>'
+      +'<div style="display:flex;gap:4px">'
+      +'<input class="chanOff" data-i="'+i+'" placeholder="開始byte" title="バイトオフセット" style="width:64px;background:var(--bg);color:var(--ink);border:1px solid var(--edge);border-radius:6px;padding:5px;font-size:11px">'
+      +'<input class="chanCnt" data-i="'+i+'" placeholder="byte数" title="バイト数" style="width:56px;background:var(--bg);color:var(--ink);border:1px solid var(--edge);border-radius:6px;padding:5px;font-size:11px">'
+      +'<input class="chanScale" data-i="'+i+'" placeholder="倍率" title="scale" style="flex:1;min-width:0;background:var(--bg);color:var(--ink);border:1px solid var(--edge);border-radius:6px;padding:5px;font-size:11px">'
+      +'<input class="chanOfs" data-i="'+i+'" placeholder="オフセット" title="offset" style="flex:1;min-width:0;background:var(--bg);color:var(--ink);border:1px solid var(--edge);border-radius:6px;padding:5px;font-size:11px">'
+      +'</div>'
+      +'</div>';
+  }
+  chanRows.innerHTML=html;
+  chanRows.querySelectorAll('.chanPreset').forEach(sel=>{
+    sel.addEventListener('change',function(){
+      const i=this.dataset.i;
+      const p=CHAN_PRESETS.find(x=>x.name===this.value);
+      if(!p||p.name==='カスタム(手動入力)')return;
+      chanRows.querySelector('.chanLabel[data-i="'+i+'"]').value=p.label;
+      chanRows.querySelector('.chanUnit[data-i="'+i+'"]').value=p.unit;
+      chanRows.querySelector('.chanMode[data-i="'+i+'"]').value=p.mode;
+      chanRows.querySelector('.chanPid[data-i="'+i+'"]').value=p.pid;
+      chanRows.querySelector('.chanHdr[data-i="'+i+'"]').value=p.hdr;
+      chanRows.querySelector('.chanOff[data-i="'+i+'"]').value=p.off;
+      chanRows.querySelector('.chanCnt[data-i="'+i+'"]').value=p.cnt;
+      chanRows.querySelector('.chanScale[data-i="'+i+'"]').value=p.scale;
+      chanRows.querySelector('.chanOfs[data-i="'+i+'"]').value=p.ofs;
+    });
+  });
+}
+buildChanRowsUI();
+
+function getChanFormValues(){
+  const arr=[];
+  for(let i=0;i<NUM_CHANNELS;i++){
+    arr.push({
+      mode:chanRows.querySelector('.chanMode[data-i="'+i+'"]').value||'1',
+      pid:chanRows.querySelector('.chanPid[data-i="'+i+'"]').value||'0',
+      hdr:chanRows.querySelector('.chanHdr[data-i="'+i+'"]').value||'0',
+      off:chanRows.querySelector('.chanOff[data-i="'+i+'"]').value||'0',
+      cnt:chanRows.querySelector('.chanCnt[data-i="'+i+'"]').value||'1',
+      scale:chanRows.querySelector('.chanScale[data-i="'+i+'"]').value||'1',
+      ofs:chanRows.querySelector('.chanOfs[data-i="'+i+'"]').value||'0',
+      label:chanRows.querySelector('.chanLabel[data-i="'+i+'"]').value||('CH'+i),
+      unit:chanRows.querySelector('.chanUnit[data-i="'+i+'"]').value||'',
+    });
+  }
+  return arr;
+}
+function setChanFormValues(arr){
+  for(let i=0;i<NUM_CHANNELS && i<arr.length;i++){
+    const c=arr[i];
+    chanRows.querySelector('.chanMode[data-i="'+i+'"]').value=String(c.mode);
+    chanRows.querySelector('.chanPid[data-i="'+i+'"]').value=c.pid;
+    chanRows.querySelector('.chanHdr[data-i="'+i+'"]').value=c.hdr;
+    chanRows.querySelector('.chanOff[data-i="'+i+'"]').value=c.off;
+    chanRows.querySelector('.chanCnt[data-i="'+i+'"]').value=c.cnt;
+    chanRows.querySelector('.chanScale[data-i="'+i+'"]').value=c.scale;
+    chanRows.querySelector('.chanOfs[data-i="'+i+'"]').value=c.ofs;
+    chanRows.querySelector('.chanLabel[data-i="'+i+'"]').value=c.label;
+    chanRows.querySelector('.chanUnit[data-i="'+i+'"]').value=c.unit;
+  }
+}
+btnChanGet.addEventListener('click',async()=>{
+  if(!hasInputSignal()){chanStatus.textContent='未接続です。先に接続してください。';return;}
+  chanStatus.textContent='機体から現在の設定を取得中…';
+  await sendCommand('CHCFG:GET');
+});
+// CHCFGVAL:応答を受け取ってフォームに反映
+function handleChanCfgVal(t){
+  const m=t.match(/^CHCFGVAL:(\d+):(\d+):([0-9A-Fa-f]+):([0-9A-Fa-f]+):(\d+):(\d+):([\-\d.]+):([\-\d.]+):([^:]*):(.*)$/);
+  if(!m)return false;
+  const i=parseInt(m[1]);
+  if(i<0||i>=NUM_CHANNELS)return true;
+  chanRows.querySelector('.chanMode[data-i="'+i+'"]').value=m[2];
+  chanRows.querySelector('.chanPid[data-i="'+i+'"]').value=m[3];
+  chanRows.querySelector('.chanHdr[data-i="'+i+'"]').value=m[4];
+  chanRows.querySelector('.chanOff[data-i="'+i+'"]').value=String(parseInt(m[5]));
+  chanRows.querySelector('.chanCnt[data-i="'+i+'"]').value=String(parseInt(m[6]));
+  chanRows.querySelector('.chanScale[data-i="'+i+'"]').value=m[7];
+  chanRows.querySelector('.chanOfs[data-i="'+i+'"]').value=m[8];
+  chanRows.querySelector('.chanLabel[data-i="'+i+'"]').value=m[9];
+  chanRows.querySelector('.chanUnit[data-i="'+i+'"]').value=m[10];
+  if(i===NUM_CHANNELS-1) chanStatus.textContent='機体の現在設定を取得しました('+new Date().toLocaleTimeString('ja-JP',{hour12:false})+')';
+  return true;
+}
+btnChanApply.addEventListener('click',async()=>{
+  if(!hasInputSignal()){chanStatus.textContent='未接続です。先に接続してください。';return;}
+  const arr=getChanFormValues();
+  btnChanApply.disabled=true;
+  for(let i=0;i<arr.length;i++){
+    const c=arr[i];
+    chanStatus.textContent='適用中… ('+(i+1)+'/'+arr.length+') '+c.label;
+    const cmd='CHCFG:'+i+':'+c.mode+':'+c.pid+':'+c.hdr+':'+c.off+':'+c.cnt+':'+c.scale+':'+c.ofs+':'+c.label+':'+c.unit;
+    await sendCommand(cmd);
+    await new Promise(r=>setTimeout(r,150));
+  }
+  chanStatus.textContent='適用完了。ダイアグ/全画面の表示ラベルは次の値受信時に更新されます。';
+  btnChanApply.disabled=false;
+});
+// ---- プロファイル保存/読込(この端末のlocalStorageのみ) ----
+function loadChanProfiles(){
+  try{return JSON.parse(localStorage.getItem('chanProfiles')||'{}');}catch(e){return{};}
+}
+function saveChanProfiles(obj){localStorage.setItem('chanProfiles',JSON.stringify(obj));}
+function refreshChanProfileSel(){
+  const profiles=loadChanProfiles();
+  const cur=chanProfileSel.value;
+  chanProfileSel.innerHTML='<option value="">― 保存済みプロファイル ―</option>';
+  for(const name of Object.keys(profiles)){
+    const o=document.createElement('option');o.value=name;o.textContent=name;
+    chanProfileSel.appendChild(o);
+  }
+  if(profiles[cur])chanProfileSel.value=cur;
+}
+refreshChanProfileSel();
+btnChanProfileSave.addEventListener('click',()=>{
+  const name=chanProfileNameIn.value.trim();
+  if(!name){chanStatus.textContent='プロファイル名を入力してください';return;}
+  const profiles=loadChanProfiles();
+  profiles[name]=getChanFormValues();
+  saveChanProfiles(profiles);
+  refreshChanProfileSel();
+  chanProfileSel.value=name;
+  chanStatus.textContent='プロファイル「'+name+'」を保存しました';
+});
+btnChanProfileLoad.addEventListener('click',()=>{
+  const name=chanProfileSel.value;
+  if(!name){chanStatus.textContent='読み込むプロファイルを選んでください';return;}
+  const profiles=loadChanProfiles();
+  if(!profiles[name])return;
+  setChanFormValues(profiles[name]);
+  chanProfileNameIn.value=name;
+  chanStatus.textContent='プロファイル「'+name+'」を読み込みました(まだ機体には未適用です。「適用」を押してください)';
+});
+btnChanProfileDel.addEventListener('click',()=>{
+  const name=chanProfileSel.value;
+  if(!name)return;
+  if(!confirm('プロファイル「'+name+'」を削除しますか?'))return;
+  const profiles=loadChanProfiles();
+  delete profiles[name];
+  saveChanProfiles(profiles);
+  refreshChanProfileSel();
+  chanStatus.textContent='プロファイル「'+name+'」を削除しました';
+});
+
 
 
 function diagPolar(cx,cy,r,angleDeg){
@@ -2285,10 +2498,26 @@ if(MCU_MODE){
   mcuLinkRow.style.display='none';   // すでにマイコン内アプリを使用中なのでリンクは不要
   mcuWatermark.classList.add('show');
 }
+// iPhone(Safari系)はHTTPSで開いていてもWeb Bluetooth/Web Serial自体が実装されていないため、
+// 非対応環境では押しても反応しないボタンにならないよう、グレーアウトして分かるようにする。
+const BLE_SUPPORTED=('bluetooth' in navigator);
+const SERIAL_SUPPORTED=('serial' in navigator);
+if(!MCU_MODE && !BLE_SUPPORTED){
+  btnBle.disabled=true;
+  btnBle.style.opacity='0.35';
+  btnBle.style.pointerEvents='none';
+  btnBle.textContent='🔵 Bluetooth(この端末は非対応)';
+}
+if(!MCU_MODE && !SERIAL_SUPPORTED){
+  btnSer.disabled=true;
+  btnSer.style.opacity='0.35';
+  btnSer.style.pointerEvents='none';
+  btnSer.textContent='🔌 USB(この端末は非対応)';
+}
 rszAll();drawG(0);drawMM(0);
-// Bluetoothをデフォルトの接続方式にする(ただし、ESP32自身が配信する安全でないコンテキストでは
-// Web Bluetoothが使えずボタン自体も非表示になるため、その場合のみWiFiのままにする)
-setSrc(MCU_MODE?'wifi':'ble');refreshSel();updateInfo();
+// Bluetoothをデフォルトの接続方式にする(ただし、ESP32自身が配信する安全でないコンテキストや、
+// iPhone(Safari)のようにWeb Bluetooth自体が無い環境では、その場合のみWiFiのままにする)
+setSrc((MCU_MODE||!BLE_SUPPORTED)?'wifi':'ble');refreshSel();updateInfo();
 patSel.value='WLTC_Class3b';selectPat('WLTC_Class3b'); // WLTCをデフォルトの走行パターンにする
 
 })();
