@@ -245,7 +245,7 @@ footer{text-align:center;font-size:13px;color:#6c7480;padding:6px 0;}
 <div id="app">
 
 <header>
-  <div class="title">Speed Tracer <span id="verTag" style="color:#4ade80;font-size:11px;letter-spacing:0;font-weight:600;vertical-align:middle">v2026-09-16.48</span></div>
+  <div class="title">Speed Tracer <span id="verTag" style="color:#4ade80;font-size:11px;letter-spacing:0;font-weight:600;vertical-align:middle">v2026-09-22.51</span></div>
   <div class="hright">
     <span class="badge" id="wakeBadge" style="cursor:pointer">💡</span>
     <span class="badge" id="srcBadge">GPS</span>
@@ -461,6 +461,13 @@ footer{text-align:center;font-size:13px;color:#6c7480;padding:6px 0;}
   </div>
   <div class="pnl" id="debugCmdPnl" style="display:none">
     <div class="plbl">コマンド送信</div>
+    <div class="row" style="margin-bottom:6px">
+      <button class="sbtn" id="btnQuickCanAll" style="border-color:#107a3a;color:#66ffb0">🚗 CAN全部(RPM等も)にする</button>
+      <button class="sbtn" id="btnQuickCanRep" style="border-color:#2a5a8a;color:#6fb8ff">🚗 CAN代表(車速のみ)にする</button>
+    </div>
+    <div class="row" style="margin-bottom:6px">
+      <button class="sbtn" id="btnQuickChanReset" style="border-color:#7a3a10;color:#ffb066">⚠️ 監視パラメータを初期設定に戻す</button>
+    </div>
     <div class="row">
       <button class="sbtn" id="btnLogOn">📡 log on</button>
       <button class="sbtn" id="btnLogOff">⏹ log off</button>
@@ -1571,6 +1578,7 @@ btnDebugCmdToggle.addEventListener('click',()=>{
   btnDebugCmdToggle.textContent=showing?'🔧 ハードウェアデバッグコマンドを表示':'🔧 ハードウェアデバッグコマンドを隠す';
 });
 const btnCmdSend=$('btnCmdSend'),btnLogOn=$('btnLogOn'),btnLogOff=$('btnLogOff'),btnStatus=$('btnStatus'),btnCanStat=$('btnCanStat'),btnCanReset=$('btnCanReset'),btnHeap=$('btnHeap');
+const btnQuickCanAll=$('btnQuickCanAll'),btnQuickCanRep=$('btnQuickCanRep'),btnQuickChanReset=$('btnQuickChanReset');
 const btnBaud500=$('btnBaud500'),btnBaud250=$('btnBaud250');
 const btnListenOn=$('btnListenOn'),btnListenOff=$('btnListenOff');
 const btnSelfOn=$('btnSelfOn'),btnSelfSend=$('btnSelfSend'),btnSelfOff=$('btnSelfOff');
@@ -1585,20 +1593,26 @@ function appendRawLog(line){
   if(atBottom) rawLog.scrollTop=rawLog.scrollHeight;
 }
 // SPEED:/EXTRA:以外の受信行の共通処理(3つの受信経路(USB/BLE/WiFi)から共通で呼ばれる)
+let statusAutoSynced=false; // 接続直後の1回だけ機体設定を取り込む(以降は手動statusで上書きしない)
 function handleUnmatched(t){
   if(t.length===0)return;
   let m;
   if(t.indexOf('CHCFGVAL:')===0){ if(handleChanCfgVal(t)){appendRawLog(t);return;} }
-  // 接続直後に送る"status"の応答。機体(全端末共通)の現在設定にこちらを合わせる。
+  // 接続直後に送る"status"の応答。機体(全端末共通)の現在設定にこちらを合わせる(最初の1回だけ)。
   // (逆に、こちらのローカル設定を機体へ押し付けると、複数端末で接続し合った時に
   //  後から繋いだ端末の初期値で他の端末の設定が無言で上書きされてしまうため)
+  // ※デバッグ画面で手動"status"を送った時などの再受信では、せっかく切り替えた設定を
+  //   表示だけ古い値に戻してしまわないよう、2回目以降はローカルの表示を上書きしない。
   if((m=t.match(/^STATUS:SRC=(CAN|ANALOG)\s+CANMODE=(ALL|REP)/))){
-    measureSrc = (m[1]==='CAN') ? 'can' : 'analog';
-    canDetail  = (m[2]==='ALL') ? 'all' : 'rep';
-    localStorage.setItem('measureSrc',measureSrc);
-    localStorage.setItem('canDetail',canDetail);
-    updateSrcButtons();
-    updatePanelVisibility();
+    if(!statusAutoSynced){
+      statusAutoSynced=true;
+      measureSrc = (m[1]==='CAN') ? 'can' : 'analog';
+      canDetail  = (m[2]==='ALL') ? 'all' : 'rep';
+      localStorage.setItem('measureSrc',measureSrc);
+      localStorage.setItem('canDetail',canDetail);
+      updateSrcButtons();
+      updatePanelVisibility();
+    }
     appendRawLog(t);
     return;
   }
@@ -1643,6 +1657,24 @@ btnCanStat.addEventListener('click',()=>{appendRawLog('--- canstat 送信 ---');
 btnCanReset.addEventListener('click',()=>{
   if(!confirm('CANドライバをリセットします。実行しますか?'))return;
   appendRawLog('--- canreset 送信 ---');sendCommand('canreset');
+});
+btnQuickCanAll.addEventListener('click',()=>{
+  measureSrc='can';localStorage.setItem('measureSrc','can');
+  canDetail='all';localStorage.setItem('canDetail','all');
+  updateSrcButtons();syncSourceSettings();
+  appendRawLog('--- クイックボタン: SRC:CAN + CANMODE:ALL 送信 ---');
+});
+btnQuickCanRep.addEventListener('click',()=>{
+  measureSrc='can';localStorage.setItem('measureSrc','can');
+  canDetail='rep';localStorage.setItem('canDetail','rep');
+  updateSrcButtons();syncSourceSettings();
+  appendRawLog('--- クイックボタン: SRC:CAN + CANMODE:REP 送信 ---');
+});
+btnQuickChanReset.addEventListener('click',async()=>{
+  if(!confirm('監視パラメータ(10チャンネル)を出荷時のデフォルト(RPM/水温/スロットル/負荷/ブースト/吸気温/MAF/点火時期/電圧/燃料)に戻します。今の設定は失われます。実行しますか?'))return;
+  appendRawLog('--- クイックボタン: CHCFG:RESET 送信 ---');
+  await sendCommand('CHCFG:RESET');
+  chanStatus.textContent='初期化を送信しました。フォームを更新するには「機体の現在設定を取得」を押してください。';
 });
 btnBaud500.addEventListener('click',()=>{appendRawLog('--- BAUD:500 送信 ---');sendCommand('BAUD:500');});
 btnBaud250.addEventListener('click',()=>{appendRawLog('--- BAUD:250 送信 ---');sendCommand('BAUD:250');});
@@ -2037,10 +2069,23 @@ function setChanFormValues(arr){
     chanRows.querySelector('.chanUnit[data-i="'+i+'"]').value=c.unit;
   }
 }
+let chanGetReceived=new Set();
+let chanGetTimer=null;
 btnChanGet.addEventListener('click',async()=>{
   if(!hasInputSignal()){chanStatus.textContent='未接続です。先に接続してください。';return;}
+  chanGetReceived=new Set();
   chanStatus.textContent='機体から現在の設定を取得中…';
   await sendCommand('CHCFG:GET');
+  clearTimeout(chanGetTimer);
+  chanGetTimer=setTimeout(()=>{
+    const missing=[];
+    for(let i=0;i<NUM_CHANNELS;i++) if(!chanGetReceived.has(i)) missing.push(i);
+    if(missing.length===0){
+      chanStatus.textContent='機体の現在設定を取得しました('+new Date().toLocaleTimeString('ja-JP',{hour12:false})+')';
+    }else{
+      chanStatus.textContent='⚠️ チャンネル'+missing.join(',')+'が届きませんでした(BLE等で取りこぼした可能性)。もう一度「機体の現在設定を取得」を押してください。このまま「適用」すると該当チャンネルが空欄で上書きされます。';
+    }
+  },2500); // BLE等で全10件が揃うのを待つ猶予
 });
 // CHCFGVAL:応答を受け取ってフォームに反映
 function handleChanCfgVal(t){
@@ -2057,12 +2102,22 @@ function handleChanCfgVal(t){
   chanRows.querySelector('.chanOfs[data-i="'+i+'"]').value=m[8];
   chanRows.querySelector('.chanLabel[data-i="'+i+'"]').value=m[9];
   chanRows.querySelector('.chanUnit[data-i="'+i+'"]').value=m[10];
-  if(i===NUM_CHANNELS-1) chanStatus.textContent='機体の現在設定を取得しました('+new Date().toLocaleTimeString('ja-JP',{hour12:false})+')';
+  chanGetReceived.add(i);
   return true;
 }
 btnChanApply.addEventListener('click',async()=>{
   if(!hasInputSignal()){chanStatus.textContent='未接続です。先に接続してください。';return;}
   const arr=getChanFormValues();
+  // PIDが0(未設定)に見えるチャンネルがあれば、意図せず空欄で上書きしないよう確認する
+  const blank=[];
+  for(let i=0;i<arr.length;i++){
+    const pidNum=parseInt(arr[i].pid,16);
+    if(!pidNum || isNaN(pidNum)) blank.push(i);
+  }
+  if(blank.length>0){
+    const ok=confirm('チャンネル'+blank.join(',')+'のPID/DIDが未設定(0)に見えます。このまま適用すると、これらのチャンネルは無効化されます。\n\n(「機体の現在設定を取得」を押した直後にBLE等で一部届かなかった場合、意図せず空欄のままになっていることがあります)\n\n本当にこのまま適用しますか?');
+    if(!ok){chanStatus.textContent='適用を中止しました。';return;}
+  }
   btnChanApply.disabled=true;
   for(let i=0;i<arr.length;i++){
     const c=arr[i];
@@ -2236,18 +2291,24 @@ function updateExtraInfo(csv){
 btnSrcAnalog.addEventListener('click',function(){
   measureSrc='analog';localStorage.setItem('measureSrc','analog');
   updateSrcButtons();syncSourceSettings();
+  appendRawLog('--- ボタン操作: SRC:ANALOG 送信 ---');
 });
 btnSrcCan.addEventListener('click',function(){
   measureSrc='can';localStorage.setItem('measureSrc','can');
   updateSrcButtons();syncSourceSettings();
+  appendRawLog('--- ボタン操作: SRC:CAN + CANMODE:'+(canDetail==='all'?'ALL':'REP')+' 送信 ---');
 });
 btnCanRep.addEventListener('click',function(){
+  measureSrc='can';localStorage.setItem('measureSrc','can');
   canDetail='rep';localStorage.setItem('canDetail','rep');
   updateSrcButtons();syncSourceSettings();
+  appendRawLog('--- ボタン操作: SRC:CAN + CANMODE:REP 送信 ---');
 });
 btnCanAll.addEventListener('click',function(){
+  measureSrc='can';localStorage.setItem('measureSrc','can');
   canDetail='all';localStorage.setItem('canDetail','all');
   updateSrcButtons();syncSourceSettings();
+  appendRawLog('--- ボタン操作: SRC:CAN + CANMODE:ALL 送信 ---');
 });
 // ---- アナログ校正値の読み込み・保存(デフォルト: 0V/10V/200km/h) ----
 calV0In.value      =localStorage.getItem('calV0')      ??'0';
