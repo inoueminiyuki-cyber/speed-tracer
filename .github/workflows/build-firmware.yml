@@ -1,0 +1,126 @@
+# ESP32(XIAO ESP32S3)用ファームウェアをGitHub上でコンパイルし、OTA用の .bin を作る。
+#
+#  - main に firmware/ か speed_tracer_pc.html の変更が入ると自動で動く(手動実行も可)
+#  - できた .bin は Releases に置かれる。最新版はいつも次のURLから落とせる:
+#      https://github.com/<ユーザー名>/<リポジトリ名>/releases/latest/download/speed_tracer_production.ino.bin
+#  - プルリクエストではコンパイルが通るかだけを確かめる(Releasesには置かない)
+#
+# 書き込み方: スマホをSpeedTracerのWiFiにつなぎ、http://192.168.4.1/update で落とした .bin を選ぶ。
+name: ファームウェアをビルド
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'firmware/**'
+      - 'speed_tracer_pc.html'
+      - 'tools/make_webpage_header.py'
+      - '.github/workflows/build-firmware.yml'
+  pull_request:
+    paths:
+      - 'firmware/**'
+      - 'speed_tracer_pc.html'
+      - 'tools/make_webpage_header.py'
+      - '.github/workflows/build-firmware.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write   # Releasesに .bin を置くために必要
+
+concurrency:
+  group: build-firmware-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  SKETCH_DIR: firmware/speed_tracer_production
+  BIN_NAME: speed_tracer_production.ino.bin
+  # PCのArduino IDEと同じ条件にそろえる(コアの版と、ツールメニューの各設定)
+  CORE_VERSION: '3.3.12'
+  FQBN: 'esp32:esp32:XIAO_ESP32S3:UploadSpeed=921600,USBMode=hwcdc,CDCOnBoot=default,MSCOnBoot=default,DFUOnBoot=default,UploadMode=default,CPUFreq=240,FlashMode=qio,FlashSize=8M,PartitionScheme=default_8MB,DebugLevel=none,PSRAM=disabled,LoopCore=1,EventsCore=1,EraseFlash=none,JTAGAdapter=default'
+  ARDUINO_BOARD_MANAGER_ADDITIONAL_URLS: https://espressif.github.io/arduino-esp32/package_esp32_index.json
+  TZ: Asia/Tokyo     # 更新ページに出るビルド日時を日本時間にする
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: arduino/setup-arduino-cli@v2
+
+      # ESP32コアは約2GBあるので、2回目以降はキャッシュから戻す
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.arduino15
+            ~/Arduino/libraries
+          key: arduino-esp32-${{ env.CORE_VERSION }}-libs-v1
+
+      - name: ESP32コアとライブラリを入れる
+        run: |
+          arduino-cli core update-index
+          arduino-cli core install "esp32:esp32@${CORE_VERSION}"
+          arduino-cli lib install "Adafruit ADS1X15" "WebSockets"
+          arduino-cli core list
+          arduino-cli lib list
+
+      - name: speed_tracer_pc.html から webpage_html.h を作る
+        run: python3 tools/make_webpage_header.py speed_tracer_pc.html "${SKETCH_DIR}/webpage_html.h"
+
+      - name: コンパイル
+        run: arduino-cli compile --fqbn "${FQBN}" --output-dir out "${SKETCH_DIR}"
+
+      - name: できた .bin を確かめる
+        id: info
+        run: |
+          BIN="out/${BIN_NAME}"
+          test -f "${BIN}"
+          VER=$(grep -oP '#define FW_VERSION "\K[^"]+' "${SKETCH_DIR}/speed_tracer_production.ino")
+          SIZE=$(stat -c %s "${BIN}")
+          SHA=$(sha256sum "${BIN}" | cut -d' ' -f1)
+          # OTAで書ける上限(アプリ領域1面ぶん = 0x330000)
+          if [ "${SIZE}" -gt 3342336 ]; then echo "::error::.bin が大きすぎます (${SIZE} bytes)"; exit 1; fi
+          # 先頭がアプリ本体の形をしているか(0xE9 と、32バイト目のアプリ情報の目印)
+          python3 - "${BIN}" <<'PY'
+          import sys
+          b = open(sys.argv[1], 'rb').read(36)
+          assert b[0] == 0xE9 and b[32:36] == bytes([0x32, 0x54, 0xCD, 0xAB]), 'アプリ本体の .bin ではありません'
+          PY
+          echo "version=${VER}" >> "${GITHUB_OUTPUT}"
+          echo "size=${SIZE}" >> "${GITHUB_OUTPUT}"
+          echo "sha256=${SHA}" >> "${GITHUB_OUTPUT}"
+          {
+            echo "### ファームウェア ${VER}"
+            echo "- サイズ: ${SIZE} bytes"
+            echo "- SHA-256: \`${SHA}\`"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: firmware-${{ steps.info.outputs.version }}-b${{ github.run_number }}
+          path: out/${{ env.BIN_NAME }}
+          if-no-files-found: error
+
+      - name: Releasesに置く
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VER: ${{ steps.info.outputs.version }}
+          SIZE: ${{ steps.info.outputs.size }}
+          SHA: ${{ steps.info.outputs.sha256 }}
+        run: |
+          TAG="fw-${VER}-b${GITHUB_RUN_NUMBER}"
+          cat > notes.md <<EOF
+          SpeedTracerのWiFiにつなぎ、http://192.168.4.1/update でこの \`${BIN_NAME}\` を選んで書き込みます。
+
+          - バージョン: ${VER}
+          - サイズ: ${SIZE} bytes
+          - SHA-256: \`${SHA}\`
+          - 元のコミット: ${GITHUB_SHA}
+          EOF
+          gh release create "${TAG}" "out/${BIN_NAME}" \
+            --target "${GITHUB_SHA}" \
+            --title "ファームウェア ${VER} (ビルド ${GITHUB_RUN_NUMBER})" \
+            --notes-file notes.md \
+            --latest
